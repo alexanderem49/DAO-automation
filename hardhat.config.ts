@@ -24,12 +24,11 @@ task("accounts", "Prints the list of accounts", async (taskArgs, hre) => {
 
 const config: HardhatUserConfig = {
   solidity: "0.8.11",
-  defaultNetwork: "polygon",
   networks: {
     hardhat: {
       forking: {
         enabled: true,
-        url: process.env.MAINNET_URL || ""
+        url: process.env.POLYGON_URL || ""
       },
       accounts: {
         count: 5

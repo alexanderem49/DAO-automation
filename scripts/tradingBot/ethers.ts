@@ -6,7 +6,7 @@ import { alluo, signers } from "./bot";
 import { getPrepand, log, setPrepand, warning } from "./logging";
 import { randomInRange, shuffle } from "./tools";
 
-export const gasPriceThreshold = 30; // gwei
+export const gasPriceThreshold = 10000; // gwei
 
 export async function isGasPriceGood(): Promise<boolean> {
     const currentGasPrice = await ethers.provider.getGasPrice();
@@ -16,6 +16,9 @@ export async function isGasPriceGood(): Promise<boolean> {
 }
 
 export async function getMaxBalance(): Promise<BigNumber> {
+    // Keep this while liquidity is low
+    return parseUnits("1.0", 6)
+
     let max: BigNumber = BigNumber.from("0");
     for (let i = 1; i < signers.length; i++) {
         const signer = signers[i];

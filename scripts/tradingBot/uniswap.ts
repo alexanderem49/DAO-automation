@@ -6,7 +6,7 @@ import { abi as QuoterABI } from '@uniswap/v3-periphery/artifacts/contracts/lens
 import { abi as IUniswapV3PoolABI } from '@uniswap/v3-core/artifacts/contracts/interfaces/IUniswapV3Pool.sol/IUniswapV3Pool.json'
 import { log, warning } from "./logging";
 import { formatEther, formatUnits, parseEther, parseUnits } from "ethers/lib/utils";
-import { alluo } from "./bot";
+import { alluo, usdc } from "./bot";
 import { executeWithTimeout } from "./tools";
 
 interface Immutables {
@@ -18,7 +18,7 @@ interface Immutables {
     maxLiquidityPerTick: ethers.BigNumber
 } // 0.009000000000000000
 
-const poolAddress = '0x4E44c9abC0b7c61E5F9e165271581d823Abf684d'
+const poolAddress = '0x350Bbc7cf0A51D5d81A417479eb3D1846F9104aC'
 const poolContract = new ethers.Contract(poolAddress, IUniswapV3PoolABI, hethers.provider)
 
 const quoterAddress = "0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6";
@@ -217,7 +217,37 @@ export async function executeTrade(
         return purchasedAmount;
     }
 
-    log("Buying ALLUO:");
+    log("Buying ALLUO, checking allowance to UniswapV3 router");
+    const approvalAmount = await usdc.callStatic.allowance(signer.address, router.address);
+    log("    USDC query: " + signer.address + " approved " + formatUnits(approvalAmount, 6) + " USDC to UniswapV3 Router (0xE592427A0AEce92De3Edee1F18E0157C05861564)");
+    if (approvalAmount.lt(orderAmount)) {
+        log("    Allowance is NOT enough, submitting approve tx")
+        const gasLimit = await usdc.connect(signer).estimateGas.approve(router.address, constants.MaxUint256);
+        const nonce = await signer.getTransactionCount();
+        log("    Gas limit: " + gasLimit.toNumber());
+        log("    Nonce: " + nonce);
+        while (!await executeWithTimeout(async () => {
+            if (await signer.getTransactionCount() > nonce) {
+                return true;
+            }
+
+            const gasPrice = (await hethers.provider.getGasPrice()).add(parseUnits("3.0", 9));
+            log("    Gas price: " + formatUnits(gasPrice, 9));
+
+            const tx = await usdc.connect(signer).approve(router.address, constants.MaxUint256, { gasLimit: gasLimit, gasPrice: gasPrice, nonce: nonce });
+            log("    Broadcasted USDC approve tx: " + tx.hash);
+
+            log("    Waiting for USDC approve tx confirmation...");
+            await tx.wait();
+            log("    USDC approve tx confirmed");
+            return true;
+        }, 360000)) {
+            log("    Timeout in USDC approve detected, sending same tx again");
+        }
+    } else {
+        log("    USDC allowance is enough")
+    }
+
     const alluoAmountBefore = await alluo.callStatic.balanceOf(signer.address);
     const params = {
         tokenIn: immutables.token1,
@@ -230,9 +260,7 @@ export async function executeTrade(
         sqrtPriceLimitX96: 0
     };
     const gasLimit = await router.connect(signer).estimateGas.exactInputSingle(
-        params, {
-        value: orderAmount,
-    }
+        params
     );
     const nonce = await signer.getTransactionCount();
     log("    Gas limit: " + gasLimit.toNumber());
