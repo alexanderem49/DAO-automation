@@ -11,17 +11,32 @@ const bot: Telegraf<Context<Update>> = new Telegraf(process.env.TELEGRAM_BOT_API
 const uniswapRouter = "0xE592427A0AEce92De3Edee1F18E0157C05861564";
 
 let alluo: IERC20Metadata;
-ethers.getContractAt("IERC20Metadata", "0x1e5193ccc53f25638aa22a940af899b692e10b09").then((x) => {
+ethers.getContractAt("IERC20Metadata", "0x12C20bcEe31bD34064cAa6eC0FD5c4c2Fce179C7").then((x) => {
     alluo = x
 });
 
 const knownAddress = [
     // Automation mnemonic addresses
-    '0xfc32Afc3B324b45323A77785f63a2c7108B04200', // DAO automation bot
-    '0xF3272F307995940acA3EDAA897C4f5BCf4cc8Dd9', // #1 for trading FUNDED operating
-    '0xF7DB6A7706CeE8B08229a8292F2AC299b67c3697', // #2 for trading FUNDED operating
-    '0x8C82F98decB9ce228c2a3CB337D70DeCdee71739', // #3 for trading FUNDED operating
-    '0x733BDc1Ada5BED2eD6585e289593e88D0E6e2877', // #4 for trading FUNDED operating
+    '0xdAFB3Bc95D7D81f8C1C435fdFf46d5dAC704F84D',
+    '0x389F1A90Ca136f2f8c789cf096B41DEF0c1D7565',
+    '0xA01fa051B4554ABd2A85732565EfdD87458bd8e9',
+    '0xEf895a5a89385fC3b89ACe32367b98E673028927',
+    '0xBEaF447a66eEb725c077411A309a6960f77f4001',
+    '0xa872C37de8c33b645CdB7321cdf34a26A696c7d5',
+    '0x94Bf7B3d2Ef7A5941c2e01720BfDEc06A347Ecbd',
+    '0x062ceCE4cF9630f0105504aFc41F70f424161189',
+    '0x2A0302556f3Fd76fA14E88a0F55aBcDDffC12c9B',
+    '0x4CE4071AFD1bBe4Ca58034a026a7A14d80b0b390',
+    '0x3dd0d1E8A4d630b924f54958fF5B920294B84cd3',
+    '0xE9abAfE732024D2383C21F16141FCac45Bd30B86',
+    '0x5665fE25058A37c49f6618B63C674955172bF7cB',
+    '0xa772F2701CD6EdaE8d575b13E4b8Fdd1730f5aD0',
+    '0x16f63eF8f3b5A39f09FeEff6db989C39eCf52B7b',
+    '0x0e972db1049E8F73d7E5FeD2F1BEC06d315b04B6',
+    '0x3859524C6Ad6871763F6C72010fFd68ecdDD080b',
+    '0xfd90829FED50843eC2a470A2B0f8a9ddF6763515',
+    '0x5A9183BaDFfe5373B01Da25eb73f6319349b726A',
+    '0xbc42Ea58B2167E1AE2045f26e491D880a537E9c8'
 ]
 
 type SwapEvent = {
@@ -39,7 +54,7 @@ const abi = [
 ];
 
 bot.start((ctx) => {
-    ctx.reply('Hello ' + ctx.from.first_name + '!');
+    ctx.reply('it has been a long... long time...');
     console.log(`User ${ctx.message.from.first_name} ${ctx.message.from.last_name} (@${ctx.message.from.username}) sent /start command`);
 });
 
@@ -59,7 +74,7 @@ bot.command("listentesttrades", (ctx) => {
     console.log(`User ${ctx.message.from.first_name} ${ctx.message.from.last_name} (@${ctx.message.from.username}) sent /listentesttrades command`);
 
     ctx.reply('Listening USDC-WETH trades (NOT ALLUO)');
-    const address = "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640"
+    const address = "0x350bbc7cf0a51d5d81a417479eb3d1846f9104ac"
 
     const filter = {
         address: address,
@@ -104,7 +119,7 @@ bot.command("listentransactiontest", (ctx) => {
                         `Address ${address} executed transaction!
                         
 Tx: https://etherscan.io/tx/${tx.hash}`
-                        );
+                    );
                 }
             }
             console.log("Processed block " + block.number + " with " + block.transactions.length + " transactions");
@@ -126,7 +141,7 @@ bot.command("listenhackertransaction", (ctx) => {
                         `Address ${address} executed transaction!
                         
 Tx: https://etherscan.io/tx/${tx.hash}`
-                        );
+                    );
                 }
             }
             console.log("Processed block " + block.number + " with " + block.transactions.length + " transactions");
@@ -134,11 +149,11 @@ Tx: https://etherscan.io/tx/${tx.hash}`
     });
 })
 
-bot.command("listenalluotrades", (ctx) => {
+bot.command("listendramtrades", (ctx) => {
     console.log(`User ${ctx.message.from.first_name} ${ctx.message.from.last_name} (@${ctx.message.from.username}) sent /listenalluotrades command`);
 
-    ctx.reply('Listening ALLUO-WETH trades');
-    const address = "0x4e44c9abc0b7c61e5f9e165271581d823abf684d"
+    ctx.reply('Listening DRAM-USDC trades');
+    const address = "0x350Bbc7cf0A51D5d81A417479eb3D1846F9104aC"
 
     const filter = {
         address: address,
@@ -154,16 +169,16 @@ bot.command("listenalluotrades", (ctx) => {
 
         ctx.reply(
             `
-UniswapV3 exchange ALLUO-WETH:
+UniswapV3 exchange DRAM-USDC:
 
 Pool balance diff:
-ALLUO: ${formatUnits(event.amount0.toString(), 18)}
-WETH: ${formatUnits(event.amount1.toString(), 18)}
+DRAM: ${formatUnits(event.amount0.toString(), 18)}
+USDC: ${formatUnits(event.amount1.toString(), 6)}
 
 Recepient: ${event.recipient} ${knownAddress.includes(event.recipient) ? "(known address)" : (event.recipient == uniswapRouter ? "UniswapV3 router" : "UNKNOWN ADDRESS")}
 Sender: ${event.sender} ${knownAddress.includes(event.sender) ? "(known address)" : (event.sender == uniswapRouter ? "UniswapV3 router" : "UNKNOWN ADDRESS")}
 
-Tx: https://etherscan.io/tx/${log.transactionHash}
+Tx: https://polygonscan.com/tx/${log.transactionHash}
 `
         )
     })

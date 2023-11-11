@@ -1,89 +1,210 @@
 import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers";
-import { BigNumber } from "ethers";
-import { formatEther, parseEther } from "ethers/lib/utils";
+import { BigNumber, Wallet, ethers } from "ethers";
+import { formatEther, formatUnits, parseEther, parseUnits } from "ethers/lib/utils";
 import { gasPriceThreshold, getMaxBalance, getRandomSigner, isGasPriceGood } from "./ethers";
-import { log, warning } from "./logging";
+import { decreasePrepend, increasePrepend, log, warning } from "./logging";
 import { delay, getRandomOppositeTradePause } from "./timing";
-import { randomInRange } from "./tools";
+import { executeWithTimeout, randomInRange } from "./tools";
 import { executeTrade, getAlluoForExactEth } from "./uniswap";
+import { dram, fundingAddress, getNewAddress, usdc } from "./bot";
 
 let alluoVolume = BigNumber.from(0);
 let ethVolume = BigNumber.from(0);
 
-async function getTradeVolume(doAlluo: boolean): Promise<BigNumber> {
-    const max = (await getMaxBalance()).div("10000").toNumber();
-    const min = Math.floor(max / 2);
+function getBuyInUsdcAmount(): BigNumber {
+    const min = 56; // 5.6
+    const max = 100000; // 10000.0
 
-    const ethValue = BigNumber.from(randomInRange(min, max)).mul("10000");
+    const amount = randomInRange(min, max) / 10;
 
-    if (doAlluo) {
-        return ethValue;
-    }
-    else {
-        // calculate ALLUO amount for `ethValue`
-        return await getAlluoForExactEth(ethValue); 
-    }
+    return parseUnits(amount.toString(), 6);
 }
 
-function doAlluoBuy(): boolean {
-    // currently hardcoded to always do $ALLUO buy first
-    return true;
-    // return randomInRange(0, 1) == 1 ? true : false;
+export async function sendTransactionWithGasPriceRetry(
+    signer: Wallet,
+    transaction: ethers.providers.TransactionRequest,
+    txLabel = ""
+) {
+    increasePrepend();
+    const timeout = 1000 * 60; // 1 minute
+    const gasLimit = await signer.estimateGas(transaction);
+    const nonce = await signer.getTransactionCount();
+    log("Gas limit: " + gasLimit.toNumber());
+    log("Nonce: " + nonce);
+
+    while (!await executeWithTimeout(async () => {
+        if (await signer.getTransactionCount() > nonce) {
+            return true;
+        }
+
+        const gasPrice = (await signer.provider!.getGasPrice()).add(parseUnits("10.0", 9));
+        log("Gas price: " + formatUnits(gasPrice, 9));
+
+        transaction.gasLimit = gasLimit;
+        transaction.gasPrice = gasPrice;
+        transaction.nonce = nonce;
+
+        const txReceipt = await signer.sendTransaction(transaction);
+
+        log("Broadcasted " + txLabel + " tx: " + txReceipt.hash);
+        log("Waiting for " + txLabel + " tx to be confirmed...");
+
+        await txReceipt.wait();
+
+        log("Confirmed " + txLabel + " tx: " + txReceipt.hash);
+        return true;
+    }, timeout)) {
+        log("Timeout in " + txLabel + " detected, sending same tx again");
+    }
+
+    decreasePrepend();
+}
+
+async function fundUsdc(signer: Wallet, amount: BigNumber) {
+    log(`Funding ${signer.address} with ${formatUnits(amount, 6)} USDC`);
+
+    const calldata = usdc.interface.encodeFunctionData("transfer", [signer.address, amount]);
+
+    const transaction = {
+        to: usdc.address,
+        data: calldata,
+    };
+
+    await sendTransactionWithGasPriceRetry(fundingAddress, transaction, "USDC funding");
+}
+
+async function fundMatic(signer: Wallet, amount: BigNumber) {
+    log(`Funding ${signer.address} with ${formatEther(amount)} MATIC`);
+
+    const transaction = {
+        to: signer.address,
+        value: amount,
+    };
+
+    await sendTransactionWithGasPriceRetry(fundingAddress, transaction, "MATIC funding");
+}
+
+async function moveDram(signerFrom: Wallet, addressTo: string) {
+    const amount = await dram.balanceOf(signerFrom.address);
+    log(`Moving ${formatEther(amount)} DRAM from ${signerFrom.address} to ${addressTo}`);
+
+    const calldata = dram.interface.encodeFunctionData("transfer", [addressTo, amount]);
+
+    const transaction = {
+        to: dram.address,
+        data: calldata,
+    };
+
+    await sendTransactionWithGasPriceRetry(signerFrom, transaction, "DRAM moving");
+}
+
+async function clearAddress(signer: Wallet) {
+    const dramBalance = await dram.balanceOf(signer.address);
+    const usdcBalance = await usdc.balanceOf(signer.address);
+    let maticBalance = await signer.getBalance();
+
+    log(`Clearing ${signer.address} with ${formatEther(dramBalance)} DRAM, ${formatUnits(usdcBalance, 6)} USDC and ${formatEther(maticBalance)} MATIC`);
+
+    if (!dramBalance.eq(BigNumber.from(0))) {
+        const calldata = dram.interface.encodeFunctionData("transfer", [fundingAddress.address, dramBalance]);
+
+        const transaction = {
+            to: dram.address,
+            data: calldata,
+        };
+
+        await sendTransactionWithGasPriceRetry(signer, transaction, "DRAM clearing");
+    }
+
+    if (!usdcBalance.eq(BigNumber.from(0))) {
+        const calldata = usdc.interface.encodeFunctionData("transfer", [fundingAddress.address, usdcBalance]);
+
+        const transaction = {
+            to: usdc.address,
+            data: calldata,
+        };
+
+        await sendTransactionWithGasPriceRetry(signer, transaction, "USDC clearing");
+    }
+
+    maticBalance = await signer.getBalance();
+    if (!maticBalance.eq(BigNumber.from(0))) {
+        const txLabel = "MATIC clearing";
+
+        increasePrepend();
+        const timeout = 1000 * 60; // 1 minute
+        const gasLimit = 21000;
+        const nonce = await signer.getTransactionCount();
+        log("Gas limit: " + gasLimit.toString());
+        log("Nonce: " + nonce);
+
+        while (!await executeWithTimeout(async () => {
+            if (await signer.getTransactionCount() > nonce) {
+                return true;
+            }
+
+            const gasPrice = (await signer.provider!.getGasPrice()).add(parseUnits("10.0", 9));
+            log("Gas price: " + formatUnits(gasPrice, 9));
+
+            let transaction: ethers.providers.TransactionRequest = {
+                to: fundingAddress.address,
+                value: maticBalance.sub(gasPrice.mul(gasLimit)),
+            };
+
+            transaction.gasLimit = gasLimit;
+            transaction.gasPrice = gasPrice;
+            transaction.nonce = nonce;
+            transaction.type = 1;
+
+            const txReceipt = await signer.sendTransaction(transaction);
+
+            log("Broadcasted " + txLabel + " tx: " + txReceipt.hash);
+            log("Waiting for " + txLabel + " tx to be confirmed...");
+
+            await txReceipt.wait();
+
+            log("Confirmed " + txLabel + " tx: " + txReceipt.hash);
+            return true;
+        }, timeout)) {
+            log("Timeout in " + txLabel + " detected, sending same tx again");
+        }
+
+        decreasePrepend();
+    }
 }
 
 export async function tradingLoop() {
-    let doAlluo = doAlluoBuy();
-    let volume = await getTradeVolume(doAlluo);
-    log("Coin toss: " + (doAlluo ? "buying" : "selling") + " ALLUO first, amount: " + formatEther(volume) + (doAlluo ? " ETH" : " ALLUO"));
+    // Get pair of new unused address
+    // send MATIC and USDC to first address
+    // buy DRAM with USDC
+    // wait random time 15 min max
+    // transfer DRAM and MATIC to second address
+    // sell DRAM for USDC
+    // clear USDC and MATIC from both addresses
+    // wait 15 min minus time spent on previous pause
 
-    let signerFirst = await getRandomSigner(volume, doAlluo);
-    while (signerFirst == null) {
-        doAlluo = doAlluoBuy();
-        volume = await getTradeVolume(doAlluo);
-    
-        warning("Coin toss again: " + (doAlluo ? "buying" : "selling") + " ALLUO first, amount: " + formatEther(volume) + (doAlluo ? " ETH" : " ALLUO"));
+    const buyInAmount = getBuyInUsdcAmount();
+    log(`Buying in with ${formatUnits(buyInAmount, 6)} USDC`);
 
-        signerFirst = await getRandomSigner(volume, doAlluo);
-    }
+    const buyInSigner = getNewAddress();
+    const buyOutSigner = getNewAddress();
 
-    log("Using address " + signerFirst.address + " to " + (doAlluo ? "buy" : "sell") + " ALLUO, amount: " + formatEther(volume) + (doAlluo ? " ETH" : " ALLUO"));
+    await fundUsdc(buyInSigner, buyInAmount);
+    await fundMatic(buyInSigner, parseEther("2.0"));
 
-    while (!await isGasPriceGood()) {
-        log("Gas price is not good (above " + gasPriceThreshold + " gwei), waiting 20s to check again...");
-        await delay(20 * 1000);
-    }
-    log("Gas price is good (below " + gasPriceThreshold + " gwei), proceeding to trading...");
+    const dramReceived = await executeTrade(buyInSigner, true, buyInAmount);
 
-    log("First trade:")
-    const amountReturned = await executeTrade(signerFirst, doAlluo, volume);
-    if (doAlluo) {
-        alluoVolume = alluoVolume.add(amountReturned);
-    } else {
-        ethVolume = ethVolume.add(amountReturned);
-    }
-    log("Total volume: " + formatEther(ethVolume) + " ETH, " + formatEther(alluoVolume) + " ALLUO");
+    await moveDram(buyInSigner, buyOutSigner.address);
+    await fundMatic(buyOutSigner, parseEther("2.0"));
 
-    const pauseBeforeReverse = getRandomOppositeTradePause();
-    log("Waiting for " + pauseBeforeReverse + " seconds before reverse trade...")
-    await delay(pauseBeforeReverse * 1000);
+    const pause = getRandomOppositeTradePause();
+    log(`Waiting ${pause} seconds before selling out`);
+    await delay(pause);
 
-    log("Reverse trade - finding someone else to execute reverse trade");
-    let signerSecond = await getRandomSigner(amountReturned, !doAlluo);
+    await executeTrade(buyOutSigner, false, dramReceived);
 
-    if (signerSecond == null) {
-        signerSecond = signerFirst;
-    }
+    await clearAddress(buyInSigner);
+    await clearAddress(buyOutSigner);
 
-    log("Using address " + signerSecond.address + " to " + (doAlluo ? "sell" : "buy") + " ALLUO, amount: " + formatEther(amountReturned) + (doAlluo ? " ALLUO" : " ETH"));
-
-    const amountReturnedReverse = await executeTrade(signerSecond, !doAlluo, amountReturned);
-    if (!doAlluo) {
-        alluoVolume = alluoVolume.add(amountReturnedReverse);
-    } else {
-        ethVolume = ethVolume.add(amountReturnedReverse);
-    }
-    log("Total volume: " + formatEther(ethVolume) + " ETH, " + formatEther(alluoVolume) + " ALLUO");
-
-    log("Reverse trade finished");
     log("Cycle completed successfully");
 }

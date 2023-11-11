@@ -31,13 +31,15 @@ const config: HardhatUserConfig = {
         url: process.env.POLYGON_URL || ""
       },
       accounts: {
-        count: 5
+        mnemonic: process.env.MNEMONIC || "test test test test test test test test test test test junk",
+        count: 2
       }
     },
     polygon: {
       url: process.env.POLYGON_URL || "http://127.0.0.1/",
       accounts: {
-        mnemonic: process.env.MNEMONIC || "test test test test test test test test test test test junk"
+        mnemonic: process.env.MNEMONIC || "test test test test test test test test test test test junk",
+        count: 2
       }
     },
     node: {

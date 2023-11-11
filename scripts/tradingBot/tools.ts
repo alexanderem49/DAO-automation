@@ -24,7 +24,7 @@ export function shuffle<T>(array: T[]): T[] {
 
 export async function executeWithTimeout(action: () => Promise<boolean>, timeoutMs: number): Promise<boolean> {
     const timeoutAction = async () => {
-        await delay(timeoutMs);
+        await delay(timeoutMs / 1000);
         return false;
     }
     return await Promise.race([action(), timeoutAction()])

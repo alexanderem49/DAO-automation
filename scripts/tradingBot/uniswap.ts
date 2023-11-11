@@ -1,13 +1,14 @@
 import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers";
-import { BigNumber, constants, ContractReceipt, ethers } from "ethers";
+import { BigNumber, constants, ContractReceipt, ethers, Wallet } from "ethers";
 import { ethers as hethers } from "hardhat";
 
 import { abi as QuoterABI } from '@uniswap/v3-periphery/artifacts/contracts/lens/Quoter.sol/Quoter.json'
 import { abi as IUniswapV3PoolABI } from '@uniswap/v3-core/artifacts/contracts/interfaces/IUniswapV3Pool.sol/IUniswapV3Pool.json'
 import { log, warning } from "./logging";
 import { formatEther, formatUnits, parseEther, parseUnits } from "ethers/lib/utils";
-import { alluo, usdc } from "./bot";
+import { dram, usdc } from "./bot";
 import { executeWithTimeout } from "./tools";
+import { sendTransactionWithGasPriceRetry } from "./trading";
 
 interface Immutables {
     factory: string
@@ -24,7 +25,7 @@ const poolContract = new ethers.Contract(poolAddress, IUniswapV3PoolABI, hethers
 const quoterAddress = "0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6";
 const quoterContract = new ethers.Contract(quoterAddress, QuoterABI, hethers.provider)
 
-const slippage = 10; // 0.1%
+const slippage = 1; // 0.01%
 
 function calculateSlippage(expectedOutput: BigNumber) {
     const delta = expectedOutput.mul(slippage).div(10000);
@@ -71,7 +72,7 @@ export async function getAlluoForExactEth(amountIn: BigNumber): Promise<BigNumbe
         0
     );
 
-    log("UniswapV3 query: " + formatEther(amountIn) + " ETH is " + formatEther(quotedAmountOut) + " ALLUO");
+    log("UniswapV3 query: " + formatUnits(amountIn, 6) + " USDC is " + formatEther(quotedAmountOut) + " DRAM");
 
     return quotedAmountOut;
 }
@@ -91,13 +92,13 @@ export async function getEthForExactAlluo(amountIn: BigNumber): Promise<BigNumbe
         0
     );
 
-    log("UniswapV3 query: " + formatEther(amountIn) + " ALLUO is " + formatEther(quotedAmountOut) + " ETH");
+    log("UniswapV3 query: " + formatEther(amountIn) + " DRAM is " + formatUnits(quotedAmountOut, 6) + " USDC");
 
     return quotedAmountOut;
 }
 
 export async function executeTrade(
-    signer: SignerWithAddress,
+    signer: Wallet,
     isAlluoBuyOrder: boolean,
     orderAmount: BigNumber
 ): Promise<BigNumber> {
@@ -110,148 +111,76 @@ export async function executeTrade(
     const router = await hethers.getContractAt("IUniswapV3Router", "0xE592427A0AEce92De3Edee1F18E0157C05861564");
 
     if (!isAlluoBuyOrder) {
-        log("Selling ALLUO, checking allowance to UniswapV3 router");
-        const approvalAmount = await alluo.callStatic.allowance(signer.address, router.address);
-        log("    AlluoToken query: " + signer.address + " approved " + formatEther(approvalAmount) + " ALLUO to UniswapV3 Router (0xE592427A0AEce92De3Edee1F18E0157C05861564)");
+        log("Selling DRAM, checking allowance to UniswapV3 router");
+        const approvalAmount = await dram.callStatic.allowance(signer.address, router.address);
+        log("    DRAM query: " + signer.address + " approved " + formatEther(approvalAmount) + " DRAM to UniswapV3 Router (0xE592427A0AEce92De3Edee1F18E0157C05861564)");
         if (approvalAmount.lt(orderAmount)) {
             log("    Allowance is NOT enough, submitting approve tx")
-            const gasLimit = await alluo.connect(signer).estimateGas.approve(router.address, constants.MaxUint256);
-            const nonce = await signer.getTransactionCount();
-            log("    Gas limit: " + gasLimit.toNumber());
-            log("    Nonce: " + nonce);
-            while (!await executeWithTimeout(async () => {
-                if (await signer.getTransactionCount() > nonce) {
-                    return true;
-                }
-                
-                const gasPrice = (await hethers.provider.getGasPrice()).add(parseUnits("3.0", 9));
-                log("    Gas price: " + formatUnits(gasPrice, 9));
+            const calldata = dram.interface.encodeFunctionData("approve", [router.address, constants.MaxUint256]);
+            const transaction = {
+                to: dram.address,
+                data: calldata,
+            };
 
-                const tx = await alluo.connect(signer).approve(router.address, constants.MaxUint256, { gasLimit: gasLimit, gasPrice: gasPrice, nonce: nonce });
-                log("    Broadcasted ALLUO approve tx: " + tx.hash);
-
-                log("    Waiting for ALLUO approve tx confirmation...");
-                await tx.wait();
-                log("    ALLUO approve tx confirmed");
-                return true;
-            }, 360000)) {
-                log("    Timeout in ALLUO approve detected, sending same tx again");
-            }
+            await sendTransactionWithGasPriceRetry(signer, transaction, "DRAM approve");
         } else {
-            log("    ALLUO allowance is enough")
+            log("    DRAM allowance is enough")
         }
 
-        const etherBalanceBefore = await signer.getBalance();
+        const usdcBalanceBefore = await usdc.balanceOf(signer.address);
         const amountOutMinimum = calculateSlippage(await getEthForExactAlluo(orderAmount));
 
-        // this gives WETH, not ETH
-        // use this: https://etherscan.io/tx/0x6841fdc87b92c043023c0fe520402f1aec587922804ba8a6ef0b2e5e486612a1
-        const calldataSwap = router.interface.encodeFunctionData(
-            "exactInputSingle",
-            [
-                {
-                    tokenIn: alluo.address,
-                    tokenOut: immutables.token1,
-                    fee: immutables.fee,
-                    recipient: constants.AddressZero,
-                    deadline: constants.MaxUint256,
-                    amountIn: orderAmount,
-                    amountOutMinimum: amountOutMinimum,
-                    sqrtPriceLimitX96: 0
-                }
-            ]
-        );
-        const calldataUnwrap = router.interface.encodeFunctionData(
-            "unwrapWETH9",
-            [
-                amountOutMinimum,
-                signer.address
-            ]
-        )
-        const gasLimit = await router.connect(signer).estimateGas.multicall(
-            [
-                calldataSwap,
-                calldataUnwrap
-            ]
-        );
-        const nonce = await signer.getTransactionCount();
-        log("    Gas limit: " + gasLimit.toNumber());
-        log("    Nonce: " + nonce);
+        const params = {
+            tokenIn: dram.address,
+            tokenOut: immutables.token1,
+            fee: immutables.fee,
+            recipient: signer.address,
+            deadline: constants.MaxUint256,
+            amountIn: orderAmount,
+            amountOutMinimum: amountOutMinimum,
+            sqrtPriceLimitX96: 0
+        }
 
-        let txReceipt: ContractReceipt;
-        while (!await executeWithTimeout(async () => {
-            if (await signer.getTransactionCount() > nonce) {
-                return true;
-            }
-
-            const gasPrice = (await hethers.provider.getGasPrice()).add(parseUnits("3.0", 9));
-            log("    Gas price: " + formatUnits(gasPrice, 9));
-
-            const tx = await router.connect(signer).multicall(
-                [
-                    calldataSwap,
-                    calldataUnwrap,
-                ], {
-                gasLimit: gasLimit,
-                gasPrice: gasPrice,
-                nonce: nonce
-            }
-            );
-    
-            log("    Broadcasted ALLUO sell tx: " + tx.hash);
-            log("    Waiting for ALLUO sell tx confirmation...");
-    
-            txReceipt = await tx.wait();
-            log("    ALLUO sell tx confirmed");
-            return true;
-        }, 360000)) {
-            log("    Timeout in ALLUO sell detected, sending same tx again");
+        const calldata = router.interface.encodeFunctionData("exactInputSingle", [params]);
+        const transaction = {
+            to: router.address,
+            data: calldata,
         };
 
-        const txFee = txReceipt!.gasUsed.mul(txReceipt!.effectiveGasPrice);
-        const etherBalanceAfter = await signer.getBalance();
-        const purchasedAmount = etherBalanceAfter.sub(etherBalanceBefore).add(txFee);
+        await sendTransactionWithGasPriceRetry(signer, transaction, "DRAM sell");
 
-        log("    Address " + signer.address + " sold ALLUO for " + formatEther(purchasedAmount) + " ETH");
+        const usdcBalanceAfter = await usdc.balanceOf(signer.address);
+        const purchasedAmount = usdcBalanceAfter.sub(usdcBalanceBefore);
+
+        log("    Address " + signer.address + " sold DRAM for " + formatUnits(purchasedAmount, 6) + " USDC");
 
         return purchasedAmount;
     }
 
-    log("Buying ALLUO, checking allowance to UniswapV3 router");
+    log("Buying DRAM, checking allowance to UniswapV3 router");
     const approvalAmount = await usdc.callStatic.allowance(signer.address, router.address);
     log("    USDC query: " + signer.address + " approved " + formatUnits(approvalAmount, 6) + " USDC to UniswapV3 Router (0xE592427A0AEce92De3Edee1F18E0157C05861564)");
     if (approvalAmount.lt(orderAmount)) {
-        log("    Allowance is NOT enough, submitting approve tx")
-        const gasLimit = await usdc.connect(signer).estimateGas.approve(router.address, constants.MaxUint256);
-        const nonce = await signer.getTransactionCount();
-        log("    Gas limit: " + gasLimit.toNumber());
-        log("    Nonce: " + nonce);
-        while (!await executeWithTimeout(async () => {
-            if (await signer.getTransactionCount() > nonce) {
-                return true;
-            }
+        if (approvalAmount.lt(orderAmount)) {
+            log("    Allowance is NOT enough, submitting approve tx")
+            const calldata = usdc.interface.encodeFunctionData("approve", [router.address, constants.MaxUint256]);
+            const transaction = {
+                to: usdc.address,
+                data: calldata,
+            };
 
-            const gasPrice = (await hethers.provider.getGasPrice()).add(parseUnits("3.0", 9));
-            log("    Gas price: " + formatUnits(gasPrice, 9));
-
-            const tx = await usdc.connect(signer).approve(router.address, constants.MaxUint256, { gasLimit: gasLimit, gasPrice: gasPrice, nonce: nonce });
-            log("    Broadcasted USDC approve tx: " + tx.hash);
-
-            log("    Waiting for USDC approve tx confirmation...");
-            await tx.wait();
-            log("    USDC approve tx confirmed");
-            return true;
-        }, 360000)) {
-            log("    Timeout in USDC approve detected, sending same tx again");
+            await sendTransactionWithGasPriceRetry(signer, transaction, "USDC approve");
+        } else {
+            log("    USDC allowance is enough")
         }
     } else {
         log("    USDC allowance is enough")
     }
 
-    const alluoAmountBefore = await alluo.callStatic.balanceOf(signer.address);
+    const dramAmountBefore = await dram.callStatic.balanceOf(signer.address);
     const params = {
         tokenIn: immutables.token1,
-        tokenOut: alluo.address,
+        tokenOut: dram.address,
         fee: immutables.fee,
         recipient: signer.address,
         deadline: constants.MaxUint256,
@@ -259,45 +188,19 @@ export async function executeTrade(
         amountOutMinimum: calculateSlippage(await getAlluoForExactEth(orderAmount)),
         sqrtPriceLimitX96: 0
     };
-    const gasLimit = await router.connect(signer).estimateGas.exactInputSingle(
-        params
-    );
-    const nonce = await signer.getTransactionCount();
-    log("    Gas limit: " + gasLimit.toNumber());
-    log("    Nonce: " + nonce);
 
-    let purchasedAmount = BigNumber.from("0");
-    while (!await executeWithTimeout(async () => {
-        if (await signer.getTransactionCount() > nonce) {
-            return true;
-        }
+    const calldata = router.interface.encodeFunctionData("exactInputSingle", [params]);
+    const transaction = {
+        to: router.address,
+        data: calldata,
+    };
 
-        const gasPrice = (await hethers.provider.getGasPrice()).add(parseUnits("3.0", 9));
-        log("    Gas price: " + formatUnits(gasPrice, 9));
+    await sendTransactionWithGasPriceRetry(signer, transaction, "DRAM buy");
 
-        const tx = await router.connect(signer).exactInputSingle(
-            params, {
-            value: orderAmount,
-            gasLimit: gasLimit,
-            gasPrice: gasPrice,
-            nonce: nonce
-        }
-        );
-        log("    Broadcasted ALLUO buy tx: " + tx.hash);
-        log("    Waiting for ALLUO buy tx confirmation...");
+    const dramAmountAfter = await dram.callStatic.balanceOf(signer.address);
+    const purchasedAmount = dramAmountAfter.sub(dramAmountBefore);
 
-        await tx.wait();
-        log("    ALLUO buy tx confirmed");
-    
-        return true;
-    }, 360000)) {
-        log("    Timeout in ALLUO buy detected, sending same tx again");
-    }
-
-    const alluoAmountAfter = await alluo.balanceOf(signer.address);
-    purchasedAmount = alluoAmountAfter.sub(alluoAmountBefore);
-
-    log("    Address " + signer.address + " bought " + formatEther(purchasedAmount) + " ALLUO for " + formatEther(orderAmount) + " ETH");
+    log("    Address " + signer.address + " bought " + formatEther(purchasedAmount) + " DRAM for " + formatUnits(orderAmount, 6) + " USDC");
 
     return purchasedAmount;
 }

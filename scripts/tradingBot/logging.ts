@@ -1,6 +1,6 @@
-let prepand: string = "";
+let prepend: string = "";
 export function print(level: string, message: string) {
-    console.log(level, "[" + new Date().toUTCString() + "]", prepand, message);
+    console.log(level, "[" + new Date().toUTCString() + "]", prepend, message);
 }
 
 export function log(message: string) {
@@ -15,10 +15,14 @@ export function warning(message: string) {
     print("WARNING:", message)
 }
 
-export function setPrepand(newPrepand: string) {
-    prepand = newPrepand;
+export function resetPrepend() {
+    prepend = ""
 }
 
-export function getPrepand(): string {
-    return prepand;
+export function increasePrepend() {
+    prepend += "    ";
+}
+
+export function decreasePrepend() {
+    prepend = prepend.substring(0, prepend.length - 4);
 }

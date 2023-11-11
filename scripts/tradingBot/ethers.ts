@@ -2,7 +2,7 @@ import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers";
 import { BigNumber, BigNumberish } from "ethers";
 import { formatEther, formatUnits, parseEther, parseUnits } from "ethers/lib/utils";
 import { ethers } from "hardhat";
-import { alluo, signers } from "./bot";
+import { dram, signers, usdc } from "./bot";
 import { getPrepand, log, setPrepand, warning } from "./logging";
 import { randomInRange, shuffle } from "./tools";
 
@@ -16,20 +16,17 @@ export async function isGasPriceGood(): Promise<boolean> {
 }
 
 export async function getMaxBalance(): Promise<BigNumber> {
-    // Keep this while liquidity is low
-    return parseUnits("1.0", 6)
-
     let max: BigNumber = BigNumber.from("0");
     for (let i = 1; i < signers.length; i++) {
         const signer = signers[i];
-        const balance = await signer.getBalance();
+        const balance = await usdc.balanceOf(signer.address);
 
         if (max.lt(balance)) {
             max = balance;
         }
     }
 
-    log(`Max owned balance is ${formatEther(max)} ETH`);
+    log(`Max owned balance is ${formatUnits(max, 6)} USDC`);
     return max;
 }
 
@@ -47,7 +44,7 @@ export async function getRandomSigner(minBalance: BigNumberish, buyAlluo: boolea
             const signer = signers[index];
             const balance = buyAlluo ?
                 await signer.getBalance():
-                await alluo.callStatic.balanceOf(signer.address);
+                await dram.callStatic.balanceOf(signer.address);
             if (balance.gte(minBalanceAdjusted)) {
                 log("Address " + signer.address + " at index " + index + " has enough balance (" + formatEther(balance) + " " + asset + ")");
                 setPrepand(prepandBefore);
