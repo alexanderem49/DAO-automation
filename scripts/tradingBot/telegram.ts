@@ -49,19 +49,27 @@ bot.command("listenblocks", (ctx) => {
 bot.command("listendramtrades", (ctx) => {
     console.log(`User ${ctx.message.from.first_name} ${ctx.message.from.last_name} (@${ctx.message.from.username}) sent /listendramtrades command`);
 
-    ctx.reply('Listening DRAM-USDC trades');
-    const address = "0x350Bbc7cf0A51D5d81A417479eb3D1846F9104aC"
+    ctx.reply('Listening DRAM-USDC and DRAM-USDT trades');
+    const addressUsdc = "0x350Bbc7cf0A51D5d81A417479eb3D1846F9104aC";
+    const addressUsdt = "0xf7d22e1f88495c2910A03F1C7746ac190e8315b6";
 
-    const filter = {
-        address: address,
+    const filterUsdc = {
+        address: addressUsdc,
         topics: [
             ethers.utils.id("Swap(address,address,int256,int256,uint160,uint128,int24)")
         ]
     };
 
-    ethers.provider.on(filter, (log) => {
+    const filterUsdt = {
+        address: addressUsdt,
+        topics: [
+            ethers.utils.id("Swap(address,address,int256,int256,uint160,uint128,int24)")
+        ]
+    };
 
-        const contract = new Contract(address, abi, ethers.provider);
+    ethers.provider.on(filterUsdc, (log) => {
+
+        const contract = new Contract(addressUsdc, abi, ethers.provider);
         const event: SwapEvent = contract.interface.decodeEventLog("Swap", log.data, log.topics) as unknown as SwapEvent;
 
         ctx.reply(
@@ -79,6 +87,28 @@ Tx: https://polygonscan.com/tx/${log.transactionHash}
 `
         )
     })
+
+    ethers.provider.on(filterUsdt, (log) => {
+
+        const contract = new Contract(addressUsdt, abi, ethers.provider);
+        const event: SwapEvent = contract.interface.decodeEventLog("Swap", log.data, log.topics) as unknown as SwapEvent;
+
+        ctx.reply(
+            `
+UniswapV3 exchange DRAM-USDT:
+
+Pool balance diff:
+DRAM: ${formatUnits(event.amount0.toString(), 18)}
+USDT: ${formatUnits(event.amount1.toString(), 6)}
+
+Recepient: ${event.recipient}
+Sender: ${event.sender}
+
+Tx: https://polygonscan.com/tx/${log.transactionHash}
+`
+        )
+    })
+
 })
 
 bot.command("stoplisteners", (ctx) => {
