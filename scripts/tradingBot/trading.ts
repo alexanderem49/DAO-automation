@@ -7,17 +7,22 @@ import { delay, getRandomOppositeTradePause } from "./timing";
 import { executeWithTimeout, randomInRange } from "./tools";
 import { executeTrade, getAlluoForExactEth } from "./uniswap";
 import { dram, fundingAddress, getNewAddress, usdc } from "./bot";
+import { IERC20Metadata } from "../../typechain";
 
-let alluoVolume = BigNumber.from(0);
-let ethVolume = BigNumber.from(0);
-
-function getBuyInUsdcAmount(): BigNumber {
+async function getBuyInAmount(token: IERC20Metadata, walletAddress: string): Promise<BigNumber> {
     const min = 56; // 5.6
-    const max = 100000; // 10000.0
+    const maxRaw = await token.balanceOf(walletAddress);
+
+    if (maxRaw.eq(BigNumber.from(0))) {
+        return BigNumber.from(0);
+    }
+
+    const decimals = await token.decimals();
+    const max = maxRaw.div(BigNumber.from(10).pow(decimals - 1)).toNumber();
 
     const amount = randomInRange(min, max) / 10;
 
-    return parseUnits(amount.toString(), 6);
+    return parseUnits(amount.toString(), await token.decimals());
 }
 
 export async function sendTransactionWithGasPriceRetry(
@@ -60,17 +65,17 @@ export async function sendTransactionWithGasPriceRetry(
     decreasePrepend();
 }
 
-async function fundUsdc(signer: Wallet, amount: BigNumber) {
-    log(`Funding ${signer.address} with ${formatUnits(amount, 6)} USDC`);
+async function fundCoin(token: IERC20Metadata, signer: Wallet, amount: BigNumber) {
+    log(`Funding ${signer.address} with ${formatUnits(amount, await token.decimals())} ${await token.symbol()}`);
 
-    const calldata = usdc.interface.encodeFunctionData("transfer", [signer.address, amount]);
+    const calldata = token.interface.encodeFunctionData("transfer", [signer.address, amount]);
 
     const transaction = {
-        to: usdc.address,
+        to: token.address,
         data: calldata,
     };
 
-    await sendTransactionWithGasPriceRetry(fundingAddress, transaction, "USDC funding");
+    await sendTransactionWithGasPriceRetry(fundingAddress, transaction, `${await token.symbol()} funding`);
 }
 
 async function fundMatic(signer: Wallet, amount: BigNumber) {
@@ -84,18 +89,18 @@ async function fundMatic(signer: Wallet, amount: BigNumber) {
     await sendTransactionWithGasPriceRetry(fundingAddress, transaction, "MATIC funding");
 }
 
-async function moveDram(signerFrom: Wallet, addressTo: string) {
-    const amount = await dram.balanceOf(signerFrom.address);
-    log(`Moving ${formatEther(amount)} DRAM from ${signerFrom.address} to ${addressTo}`);
+async function moveCoin(token: IERC20Metadata, signerFrom: Wallet, addressTo: string) {
+    const amount = await token.balanceOf(signerFrom.address);
+    log(`Moving ${formatUnits(amount, await token.decimals())} ${await token.symbol()} from ${signerFrom.address} to ${addressTo}`);
 
-    const calldata = dram.interface.encodeFunctionData("transfer", [addressTo, amount]);
+    const calldata = token.interface.encodeFunctionData("transfer", [addressTo, amount]);
 
     const transaction = {
-        to: dram.address,
+        to: token.address,
         data: calldata,
     };
 
-    await sendTransactionWithGasPriceRetry(signerFrom, transaction, "DRAM moving");
+    await sendTransactionWithGasPriceRetry(signerFrom, transaction, `${await token.symbol()} moving`);
 }
 
 async function clearAddress(signer: Wallet) {
@@ -174,37 +179,64 @@ async function clearAddress(signer: Wallet) {
 }
 
 export async function tradingLoop() {
-    // Get pair of new unused address
-    // send MATIC and USDC to first address
-    // buy DRAM with USDC
-    // wait random time 15 min max
-    // transfer DRAM and MATIC to second address
-    // sell DRAM for USDC
-    // clear USDC and MATIC from both addresses
-    // wait 15 min minus time spent on previous pause
+    // 50/50 chance of buying or selling
+    let isBuy = Math.random() < 0.5;
+    log(`Action: ${isBuy ? "buy" : "sell"} DRAM`);
 
-    const buyInAmount = getBuyInUsdcAmount();
-    log(`Buying in with ${formatUnits(buyInAmount, 6)} USDC`);
+    let buyInAmount: BigNumber;
+    if (isBuy) {
+        buyInAmount = await getBuyInAmount(usdc, fundingAddress.address);
+        log(`Buying in with ${formatUnits(buyInAmount, 6)} USDC`);
+    } else {
+        buyInAmount = await getBuyInAmount(dram, fundingAddress.address);
+        log(`Selling out with ${formatEther(buyInAmount)} DRAM`);
+    }
 
-    const buyInSigner = getNewAddress();
-    const buyOutSigner = getNewAddress();
+    if (buyInAmount.eq(BigNumber.from(0))) {
+        warning("Not enough funds to trade, reversing action");
+        
+        isBuy = !isBuy;
 
-    await fundUsdc(buyInSigner, buyInAmount);
-    await fundMatic(buyInSigner, parseEther("2.0"));
+        if (isBuy) {
+            buyInAmount = await getBuyInAmount(usdc, fundingAddress.address);
+            log(`Buying in with ${formatUnits(buyInAmount, 6)} USDC`);
+        } else {
+            buyInAmount = await getBuyInAmount(dram, fundingAddress.address);
+            log(`Selling out with ${formatEther(buyInAmount)} DRAM`);
+        }
+    }
 
-    const dramReceived = await executeTrade(buyInSigner, true, buyInAmount);
+    const stepOneSigner = getNewAddress();
+    const stepTwoSigner = getNewAddress();
 
-    await moveDram(buyInSigner, buyOutSigner.address);
-    await fundMatic(buyOutSigner, parseEther("2.0"));
+    if (isBuy) {
+        await fundCoin(usdc, stepOneSigner, buyInAmount);
+    }
+    else {
+        await fundCoin(dram, stepOneSigner, buyInAmount);
+    }
+
+    await fundMatic(stepOneSigner, parseEther("2.0"));
+
+    const dramReceived = await executeTrade(stepOneSigner, isBuy, buyInAmount);
+
+
+    if (isBuy) {
+        await moveCoin(dram, stepOneSigner, stepTwoSigner.address);
+    } else {
+        await moveCoin(usdc, stepOneSigner, stepTwoSigner.address);
+    }
+
+    await fundMatic(stepTwoSigner, parseEther("2.0"));
 
     const pause = getRandomOppositeTradePause();
     log(`Waiting ${pause} seconds before selling out`);
     await delay(pause);
 
-    await executeTrade(buyOutSigner, false, dramReceived);
+    await executeTrade(stepTwoSigner, !isBuy, dramReceived);
 
-    await clearAddress(buyInSigner);
-    await clearAddress(buyOutSigner);
+    await clearAddress(stepOneSigner);
+    await clearAddress(stepTwoSigner);
 
     log("Cycle completed successfully");
 }

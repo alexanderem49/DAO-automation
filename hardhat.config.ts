@@ -32,7 +32,7 @@ const config: HardhatUserConfig = {
       },
       accounts: {
         mnemonic: process.env.MNEMONIC || "test test test test test test test test test test test junk",
-        count: 2
+        count: 1
       }
     },
     polygon: {

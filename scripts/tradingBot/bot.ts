@@ -48,17 +48,23 @@ async function init() {
     if (network.chainId == 31337) {
         log("Hardhat network detected, setting custom balance and getting USDC...");
         const usdcWhale = await ethers.getImpersonatedSigner("0xe7804c37c13166fF0b37F5aE0BB07A3aEbb6e245");
+        const dramWhale = await ethers.getImpersonatedSigner("0x040eB4673D7929927f40D52581b22aF54E7C6cBe");
 
         for (let i = 0; i < signers.length; i++) {
             const signer = signers[i];
 
             await usdc.connect(usdcWhale).transfer(
-                signer.address,
-                parseUnits("1000000", 6)
+                signers[0].address,
+                parseUnits("1000", 6)
+            );
+
+            await dram.connect(dramWhale).transfer(
+                signers[0].address,
+                parseUnits("1000", 18)
             );
 
             await ethers.provider.send("hardhat_setBalance", [
-                signer.address,
+                signers[0].address,
                 "0x367f3bbb9448bd4000", // 3.926923076923080000 - 367f3bbb9448bd40
               ]);
         }
