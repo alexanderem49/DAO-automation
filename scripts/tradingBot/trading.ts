@@ -179,24 +179,15 @@ async function clearAddress(signer: Wallet) {
 }
 
 export async function tradingLoop() {
-    // 50/50 chance of buying or selling
-    let isBuy = Math.random() < 0.5;
-    log(`Action: ${isBuy ? "buy" : "sell"} DRAM`);
+    const stepOneSigner = getNewAddress();
+    const stepTwoSigner = getNewAddress();
 
-    let buyInAmount: BigNumber;
-    if (isBuy) {
-        buyInAmount = await getBuyInAmount(usdc, fundingAddress.address);
-        log(`Buying in with ${formatUnits(buyInAmount, 6)} USDC`);
-    } else {
-        buyInAmount = await getBuyInAmount(dram, fundingAddress.address);
-        log(`Selling out with ${formatEther(buyInAmount)} DRAM`);
-    }
+    try {
+        // 50/50 chance of buying or selling
+        let isBuy = Math.random() < 0.5;
+        log(`Action: ${isBuy ? "buy" : "sell"} DRAM`);
 
-    if (buyInAmount.eq(BigNumber.from(0))) {
-        warning("Not enough funds to trade, reversing action");
-        
-        isBuy = !isBuy;
-
+        let buyInAmount: BigNumber;
         if (isBuy) {
             buyInAmount = await getBuyInAmount(usdc, fundingAddress.address);
             log(`Buying in with ${formatUnits(buyInAmount, 6)} USDC`);
@@ -204,39 +195,56 @@ export async function tradingLoop() {
             buyInAmount = await getBuyInAmount(dram, fundingAddress.address);
             log(`Selling out with ${formatEther(buyInAmount)} DRAM`);
         }
+
+        if (buyInAmount.eq(BigNumber.from(0))) {
+            warning("Not enough funds to trade, reversing action");
+
+            isBuy = !isBuy;
+
+            if (isBuy) {
+                buyInAmount = await getBuyInAmount(usdc, fundingAddress.address);
+                log(`Buying in with ${formatUnits(buyInAmount, 6)} USDC`);
+            } else {
+                buyInAmount = await getBuyInAmount(dram, fundingAddress.address);
+                log(`Selling out with ${formatEther(buyInAmount)} DRAM`);
+            }
+        }
+
+        if (isBuy) {
+            await fundCoin(usdc, stepOneSigner, buyInAmount);
+        }
+        else {
+            await fundCoin(dram, stepOneSigner, buyInAmount);
+        }
+
+        await fundMatic(stepOneSigner, parseEther("2.0"));
+
+        const dramReceived = await executeTrade(stepOneSigner, isBuy, buyInAmount);
+
+
+        if (isBuy) {
+            await moveCoin(dram, stepOneSigner, stepTwoSigner.address);
+        } else {
+            await moveCoin(usdc, stepOneSigner, stepTwoSigner.address);
+        }
+
+        await fundMatic(stepTwoSigner, parseEther("2.0"));
+
+        const pause = getRandomOppositeTradePause();
+        log(`Waiting ${pause} seconds before selling out`);
+        await delay(pause);
+
+        await executeTrade(stepTwoSigner, !isBuy, dramReceived);
+
+        await clearAddress(stepOneSigner);
+        await clearAddress(stepTwoSigner);
+
+        log("Cycle completed successfully");
     }
+    catch (e) {
+        await clearAddress(stepOneSigner);
+        await clearAddress(stepTwoSigner);
 
-    const stepOneSigner = getNewAddress();
-    const stepTwoSigner = getNewAddress();
-
-    if (isBuy) {
-        await fundCoin(usdc, stepOneSigner, buyInAmount);
+        throw e;
     }
-    else {
-        await fundCoin(dram, stepOneSigner, buyInAmount);
-    }
-
-    await fundMatic(stepOneSigner, parseEther("2.0"));
-
-    const dramReceived = await executeTrade(stepOneSigner, isBuy, buyInAmount);
-
-
-    if (isBuy) {
-        await moveCoin(dram, stepOneSigner, stepTwoSigner.address);
-    } else {
-        await moveCoin(usdc, stepOneSigner, stepTwoSigner.address);
-    }
-
-    await fundMatic(stepTwoSigner, parseEther("2.0"));
-
-    const pause = getRandomOppositeTradePause();
-    log(`Waiting ${pause} seconds before selling out`);
-    await delay(pause);
-
-    await executeTrade(stepTwoSigner, !isBuy, dramReceived);
-
-    await clearAddress(stepOneSigner);
-    await clearAddress(stepTwoSigner);
-
-    log("Cycle completed successfully");
 }
