@@ -2,7 +2,7 @@ import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers";
 import { BigNumber, Wallet, ethers } from "ethers";
 import { formatEther, formatUnits, parseEther, parseUnits } from "ethers/lib/utils";
 import { gasPriceThreshold, getMaxBalance, getRandomSigner, isGasPriceGood } from "./ethers";
-import { decreasePrepend, increasePrepend, log, warning } from "./logging";
+import { decreasePrepend, increasePrepend, log, warning, error } from "./logging";
 import { delay, getRandomOppositeTradePause } from "./timing";
 import { executeWithTimeout, randomInRange } from "./tools";
 import { executeTrade, getAlluoForExactEth } from "./uniswap";
@@ -37,12 +37,18 @@ export async function sendTransactionWithGasPriceRetry(
     log("Gas limit: " + gasLimit.toNumber());
     log("Nonce: " + nonce);
 
+    let gasPrice = await signer.provider!.getGasPrice();
+
     while (!await executeWithTimeout(async () => {
         if (await signer.getTransactionCount() > nonce) {
             return true;
         }
 
-        const gasPrice = (await signer.provider!.getGasPrice()).add(parseUnits("10.0", 9));
+        gasPrice = gasPrice.add(gasPrice.div(10));
+        const currentGasPrice = await signer.provider!.getGasPrice();
+        if (currentGasPrice.gt(gasPrice)) {
+            gasPrice = currentGasPrice;
+        }
         log("Gas price: " + formatUnits(gasPrice, 9));
 
         transaction.gasLimit = gasLimit;
@@ -242,8 +248,18 @@ export async function tradingLoop() {
         log("Cycle completed successfully");
     }
     catch (e) {
-        await clearAddress(stepOneSigner);
-        await clearAddress(stepTwoSigner);
+        while (true) {
+            try {
+                await clearAddress(stepOneSigner);
+                await clearAddress(stepTwoSigner);
+                break;
+            }
+            catch (e) {
+                error("Failed to clear address, retrying in 15 seconds");
+                console.log("\n", e, "\n");
+                await delay(15);
+            }
+        }
 
         throw e;
     }
