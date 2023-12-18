@@ -2,7 +2,7 @@ import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers";
 import { BigNumber, Wallet, ethers } from "ethers";
 import { formatEther, formatUnits, parseEther, parseUnits } from "ethers/lib/utils";
 import { gasPriceThreshold, getMaxBalance, getRandomSigner, isGasPriceGood } from "./ethers";
-import { decreasePrepend, increasePrepend, log, warning, error } from "./logging";
+import { decreasePrepend, increasePrepend, log, warning, error, resetPrepend } from "./logging";
 import { delay, getRandomOppositeTradePause } from "./timing";
 import { executeWithTimeout, randomInRange } from "./tools";
 import { executeTrade, getAlluoForExactEth } from "./uniswap";
@@ -116,6 +116,10 @@ async function clearAddress(signer: Wallet) {
 
     log(`Clearing ${signer.address} with ${formatEther(dramBalance)} DRAM, ${formatUnits(usdcBalance, 6)} USDC and ${formatEther(maticBalance)} MATIC`);
 
+    if (maticBalance.eq(BigNumber.from(0))) {
+        await fundMatic(signer, parseEther("1.0"));
+    }
+
     if (!dramBalance.eq(BigNumber.from(0))) {
         const calldata = dram.interface.encodeFunctionData("transfer", [fundingAddress.address, dramBalance]);
 
@@ -227,14 +231,13 @@ export async function tradingLoop() {
 
         const dramReceived = await executeTrade(stepOneSigner, isBuy, buyInAmount);
 
+        await fundMatic(stepTwoSigner, parseEther("2.0"));
 
         if (isBuy) {
             await moveCoin(dram, stepOneSigner, stepTwoSigner.address);
         } else {
             await moveCoin(usdc, stepOneSigner, stepTwoSigner.address);
         }
-
-        await fundMatic(stepTwoSigner, parseEther("2.0"));
 
         const pause = getRandomOppositeTradePause();
         log(`Waiting ${pause} seconds before selling out`);
@@ -249,6 +252,9 @@ export async function tradingLoop() {
     }
     catch (e) {
         while (true) {
+            resetPrepend();
+            increasePrepend();
+
             try {
                 await clearAddress(stepOneSigner);
                 await clearAddress(stepTwoSigner);

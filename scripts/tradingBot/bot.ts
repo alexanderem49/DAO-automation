@@ -1,7 +1,7 @@
 import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers";
 import { ethers } from "hardhat";
 import { IERC20Metadata } from "../../typechain/IERC20Metadata";
-import { decreasePrepend, error, increasePrepend, log } from "./logging";
+import { decreasePrepend, error, increasePrepend, log, resetPrepend } from "./logging";
 import { delay, getRandomExecutionPause } from "./timing";
 import { tradingLoop as tradingCycle } from "./trading";
 import { parseUnits } from "ethers/lib/utils";
@@ -85,6 +85,7 @@ async function main() {
 
     while (true) {
         console.log();
+        resetPrepend();
         log("Next cycle:");
         increasePrepend()
 
