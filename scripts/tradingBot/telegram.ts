@@ -5,8 +5,15 @@ import { ethers } from 'hardhat';
 import { BigNumber, Contract } from 'ethers';
 import { formatEther, formatUnits } from 'ethers/lib/utils';
 import { IERC20Metadata } from '../../typechain';
+import { Agent } from "node:https";
 
-const bot: Telegraf<Context<Update>> = new Telegraf(process.env.TELEGRAM_BOT_API as string);
+const bot: Telegraf<Context<Update>> = new Telegraf(process.env.TELEGRAM_BOT_API as string,
+    {
+        telegram: {
+            agent: new Agent({ keepAlive: false }),
+        },
+    }
+);
 
 const uniswapRouter = "0xE592427A0AEce92De3Edee1F18E0157C05861564";
 
