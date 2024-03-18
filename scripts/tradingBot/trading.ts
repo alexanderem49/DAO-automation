@@ -192,6 +192,13 @@ export async function tradingLoop() {
     const stepOneSigner = getNewAddress();
     const stepTwoSigner = getNewAddress();
 
+    const fundingAddressBalance = await fundingAddress.getBalance();
+
+    if (fundingAddressBalance.lte(parseEther("10.0"))) {
+        error("Funding address balance too low, exiting");
+        return;
+    }
+
     try {
         // 50/50 chance of buying or selling
         let isBuy = Math.random() < 0.5;
@@ -220,6 +227,9 @@ export async function tradingLoop() {
             }
         }
 
+        await fundMatic(stepOneSigner, parseEther("2.0"));
+        await fundMatic(stepTwoSigner, parseEther("2.0"));
+
         if (isBuy) {
             await fundCoin(usdc, stepOneSigner, buyInAmount);
         }
@@ -227,11 +237,8 @@ export async function tradingLoop() {
             await fundCoin(dram, stepOneSigner, buyInAmount);
         }
 
-        await fundMatic(stepOneSigner, parseEther("2.0"));
 
         const dramReceived = await executeTrade(stepOneSigner, isBuy, buyInAmount);
-
-        await fundMatic(stepTwoSigner, parseEther("2.0"));
 
         if (isBuy) {
             await moveCoin(dram, stepOneSigner, stepTwoSigner.address);
