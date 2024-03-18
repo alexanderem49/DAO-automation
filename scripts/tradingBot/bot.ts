@@ -28,7 +28,7 @@ export function getNewAddress() {
 async function init() {
     signers = await ethers.getSigners();
     dram = await ethers.getContractAt("IERC20Metadata", "0x12C20bcEe31bD34064cAa6eC0FD5c4c2Fce179C7");
-    usdc = await ethers.getContractAt("IERC20Metadata", "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174");
+    usdc = await ethers.getContractAt("IERC20Metadata", "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359");
 
     const network = await ethers.provider.getNetwork();
     log("Connected to network with chainId: " + network.chainId);
